@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Virus Runner — Escape del sistema inmune</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;background:#e9edf0;color:#202124;font-family:monospace;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:18px}
+  .wrap{width:min(960px,100%)}
+  h1{text-align:center;font-size:clamp(20px,4vw,30px);margin:0 0 6px;letter-spacing:1px}
+  .sub{text-align:center;margin:0 0 16px;color:#59636b;font-size:13px}
+  .gamebox{border:3px solid #202124;background:#fff;box-shadow:8px 8px 0 #aeb7bd;position:relative}
+  canvas{display:block;width:100%;height:auto;image-rendering:pixelated;image-rendering:crisp-edges}
+  .hud{display:flex;justify-content:space-between;gap:12px;padding:10px 14px;border:3px solid #202124;border-top:0;background:#f7f7f7;font-weight:bold;font-size:14px}
+  .help{text-align:center;color:#505b63;font-size:12px;line-height:1.7;margin-top:14px}
+  button{font-family:inherit;font-weight:bold;border:2px solid #202124;background:#fff;padding:10px 16px;cursor:pointer;box-shadow:3px 3px 0 #202124}
+  button:hover{background:#e8f4ec}
+  .actions{text-align:center;margin-top:12px}
+  @media(max-width:560px){.hud{font-size:11px;padding:8px}.help{font-size:11px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🦠 VIRUS RUNNER</h1>
+  <p class="sub">¡Escapa de las defensas del sistema inmunológico!</p>
+  <div class="gamebox">
+    <canvas id="game" width="900" height="300" aria-label="Juego Virus Runner"></canvas>
+  </div>
+  <div class="hud">
+    <span id="score">HI 00000&nbsp;&nbsp; 00000</span>
+    <span id="virusName">VIRUS: ADENOVIRUS</span>
+  </div>
+  <div class="actions"><button id="restart">REINICIAR / JUGAR</button></div>
+  <div class="help">
+    <b>ESPACIO o ↑</b> saltar &nbsp; | &nbsp; <b>↓</b> agacharse<br>
+    En móvil: toca la pantalla para saltar y mantén pulsado para agacharte.<br>
+    Evita glóbulos blancos, macrófagos, anticuerpos y otros obstáculos. ¡No dejes que te atrapen!
+  </div>
+</div>
+<script>
+(() => {
+ const canvas=document.getElementById('game'), ctx=canvas.getContext('2d');
+ const scoreEl=document.getElementById('score'), virusEl=document.getElementById('virusName');
+ const W=canvas.width,H=canvas.height,ground=245;
+ const viruses=[
+  {name:'ADENOVIRUS',color:'#48a9d6',spikes:'#176b9a',shape:0},
+  {name:'CORONAVIRUS',color:'#e8a34a',spikes:'#b95c35',shape:1},
+  {name:'ROTAVIRUS',color:'#a77bd1',spikes:'#70449d',shape:2},
+  {name:'BACTERIÓFAGO',color:'#6abf83',spikes:'#278653',shape:3},
+  {name:'RINOVIRUS',color:'#e47e9d',spikes:'#a83d62',shape:0}
+ ];
+ let player, obstacles, particles, score, hi=Number(localStorage.getItem('virusRunnerHI')||0), speed, frame, running, started, gameOver, dark, darkTimer, nextSwitch, virusIndex, lastVirusChange, clouds, groundOffset;
+ let down=false;
+ function reset(){
+  player={x:85,y:ground-42,w:40,h:42,vy:0,duck:false,onGround:true};
+  obstacles=[];particles=[];score=0;speed=6;frame=0;running=true;started=true;gameOver=false;dark=false;darkTimer=0;nextSwitch=700;virusIndex=0;lastVirusChange=0;groundOffset=0;
+  clouds=[{x:160,y:65},{x:470,y:95},{x:760,y:55}];virusEl.textContent='VIRUS: '+viruses[0].name;
+ }
+ function rect(x,y,w,h,c){ctx.fillStyle=c;ctx.fillRect(Math.round(x),Math.round(y),Math.round(w),Math.round(h))}
+ function pixelText(t,x,y,size=14,color){ctx.fillStyle=color|| (dark?'#f4f4f4':'#222');ctx.font=`bold ${size}px monospace`;ctx.fillText(t,x,y)}
+ function drawVirus(x,y,scale=1,v=viruses[virusIndex]){
+  ctx.save();ctx.translate(x,y);ctx.scale(scale,scale);
+  const c=v.color,s=v.spikes;
+  if(v.shape===3){
+   // Bacteriófago pixelado
+   rect(13,0,14,5,s);rect(8,5,24,20,c);rect(13,25,14,5,s);
+   rect(18,30,4,9,s);rect(7,37,4,7,s);rect(29,37,4,7,s);
+   rect(4,44,4,5,s);rect(32,44,4,5,s);
+  }else{
+   rect(10,3,20,4,s);rect(4,9,32,24,c);rect(10,33,20,5,s);
+   if(v.shape===1){ // corona
+    for(let a=0;a<8;a++){let ang=a*Math.PI/4;rect(19+Math.cos(ang)*20,20+Math.sin(ang)*20,5,5,s)}
+   }else if(v.shape===2){ // rotavirus capsid
+    rect(12,11,16,18,'#d7b6ef');rect(16,7,8,26,s);rect(8,15,24,8,s);
+   }else{
+    rect(0,15,7,5,s);rect(33,15,7,5,s);rect(17,0,5,7,s);rect(17,34,5,7,s);
+   }
+  }
+  // cara
+  rect(12,17,5,5,'#17212b');rect(24,17,5,5,'#17212b');rect(15,27,12,3,'#17212b');
+  ctx.restore();
+ }
+ function drawImmune(o){
+  const x=o.x,y=o.y,t=o.type;
+  if(t==='white'){
+   // Glóbulo blanco
+   rect(x+8,y,25,7,'#9ab8d8');rect(x,y+8,42,24,'#dce8f4');rect(x+7,y+32,28,7,'#9ab8d8');
+   rect(x+12,y+13,17,14,'#6e8eb8');rect(x+15,y+16,5,5,'#dce8f4');
+  }else if(t==='macro'){
+   // Macrófago con pseudópodos
+   rect(x+10,y+5,25,28,'#e5bd68');rect(x+2,y+12,10,12,'#e5bd68');rect(x+33,y+10,10,13,'#e5bd68');
+   rect(x+15,y+12,15,14,'#a8793c');rect(x+19,y+15,5,5,'#fff0c7');
+   rect(x+5,y+2,8,8,'#e5bd68');rect(x+33,y+30,8,8,'#e5bd68');
+  }else if(t==='antibody'){
+   // Anticuerpo Y
+   rect(x+17,y+18,7,25,'#e7d36c');rect(x+6,y+5,7,20,'#e7d36c');rect(x+28,y+5,7,20,'#e7d36c');
+   rect(x+9,y+18,14,7,'#e7d36c');rect(x+21,y+18,13,7,'#e7d36c');
+   rect(x+4,y,10,7,'#fff0a8');rect(x+27,y,10,7,'#fff0a8');
+  }else if(t==='neutro'){
+   rect(x+3,y+5,36,29,'#8dc6ad');rect(x+10,y+11,8,15,'#438b70');rect(x+20,y+10,8,16,'#438b70');rect(x+28,y+14,7,10,'#438b70');
+  }else if(t==='complement'){
+   rect(x+4,y+7,32,26,'#b7a4d8');rect(x,y+15,8,10,'#8066a9');rect(x+34,y+15,8,10,'#8066a9');rect(x+15,y+13,5,5,'#fff');rect(x+25,y+13,5,5,'#fff');
+  }
+ }
+ function spawn(){
+  const r=Math.random();
+  let type=r<.27?'white':r<.48?'macro':r<.68?'antibody':r<.84?'neutro':'complement';
+  const air=type==='antibody'||(type==='complement'&&Math.random()<.55);
+  const h=type==='antibody'?46:39,w=type==='antibody'?42:42;
+  obstacles.push({x:W+20,y:air?ground-(Math.random()<.5?100:68):ground-h,w,h,type});
+ }
+ function drawObstacle(o){drawImmune(o)}
+ function drawBackground(){
+  ctx.fillStyle=dark?'#17191f':'#fff';ctx.fillRect(0,0,W,H);
+  // estrellas o nubes
+  if(dark){
+   for(let i=0;i<32;i++){let x=(i*97+frame*.12)%W,y=(i*47)%180;rect(x,y,2,2,'#d9e2ef')}
+  }else{
+   clouds.forEach(c=>{rect(c.x,c.y,34,5,'#e7edf0');rect(c.x+8,c.y-5,22,5,'#e7edf0');rect(c.x+15,c.y+5,26,4,'#e7edf0')});
+  }
+  rect(0,ground,W,2,dark?'#e8e8e8':'#555');
+  for(let i=0;i<18;i++){let x=((i*62-groundOffset)%W+W)%W;rect(x,ground+13,12,2,dark?'#9ca3ad':'#b7b7b7')}
+ }
+ function drawPlayer(){
+  let h=player.duck?27:42,y=player.duck?ground-27:player.y;
+  drawVirus(player.x,y,1,viruses[virusIndex]);
+  if(player.duck){ // postura baja visual
+   rect(player.x+4,y+30,32,5,viruses[virusIndex].color);
+  }
+ }
+ function drawOverlay(title,line1,line2){
+  ctx.fillStyle=dark?'rgba(0,0,0,.55)':'rgba(255,255,255,.72)';ctx.fillRect(0,0,W,H);
+  pixelText(title, W/2- title.length*9,118,25,dark?'#fff':'#222');
+  pixelText(line1,W/2-line1.length*4.1,151,13,dark?'#fff':'#333');
+  if(line2)pixelText(line2,W/2-line2.length*4.1,175,12,dark?'#fff':'#333');
+ }
+ function update(){
+  if(!running)return;
+  frame++;score+=Math.max(1,Math.floor(speed/6));speed=Math.min(14,6+score/850);
+  groundOffset=(groundOffset+speed)%W;
+  clouds.forEach(c=>{c.x-=speed*.25;if(c.x<-60)c.x=W+30});
+  // Cambio periódico de virus sin detener la carrera
+  if(frame-lastVirusChange>850){virusIndex=(virusIndex+1+Math.floor(Math.random()*3))%viruses.length;lastVirusChange=frame;virusEl.textContent='VIRUS: '+viruses[virusIndex].name}
+  // Ciclos claro/oscuro como Chrome Dino
+  if(score>=nextSwitch){dark=!dark;nextSwitch+=700+Math.floor(Math.random()*350);darkTimer=0}
+  if(player.onGround){player.y=ground-player.h}
+  else{player.vy+=.68;player.y+=player.vy;if(player.y>=ground-player.h){player.y=ground-player.h;player.vy=0;player.onGround=true}}
+  player.duck=down&&player.onGround;
+  if(frame%Math.max(35,Math.floor(88-speed*3))===0)spawn();
+  obstacles.forEach(o=>o.x-=speed);
+  obstacles=obstacles.filter(o=>o.x+o.w>-10);
+  // Colisiones con margen pequeño para que el control se sienta justo
+  const ph=player.duck?25:player.h, py=player.duck?ground-27:player.y;
+  for(const o of obstacles){
+   if(player.x+31>o.x+5&&player.x+7<o.x+o.w-5&&py+ph-4>o.y+4&&py+5<o.y+o.h-3){endGame();break}
+  }
+  if(score>hi){hi=score;localStorage.setItem('virusRunnerHI',hi)}
+  scoreEl.textContent=`HI ${String(hi).padStart(5,'0')}   ${String(score).padStart(5,'0')}`;
+ }
+ function endGame(){running=false;gameOver=true}
+ function render(){
+  drawBackground();
+  obstacles.forEach(drawObstacle);
+  drawPlayer();
+  if(!started)drawOverlay('VIRUS RUNNER','Presiona ESPACIO o ↑ para comenzar','↓ para agacharte');
+  else if(gameOver)drawOverlay('GAME OVER',`PUNTUACION ${String(score).padStart(5,'0')}   RECORD ${String(hi).padStart(5,'0')}`,'Presiona ESPACIO o toca para volver a jugar');
+ }
+ function loop(){update();render();requestAnimationFrame(loop)}
+ function jump(){
+  if(!started||gameOver){reset();return}
+  if(player.onGround&&!down){player.vy=-12.5;player.onGround=false;player.duck=false}
+ }
+ document.addEventListener('keydown',e=>{
+  if(e.code==='Space'||e.code==='ArrowUp'){e.preventDefault();if(!e.repeat)jump()}
+  if(e.code==='ArrowDown'){e.preventDefault();down=true}
+ });
+ document.addEventListener('keyup',e=>{if(e.code==='ArrowDown')down=false});
+ canvas.addEventListener('pointerdown',e=>{e.preventDefault();jump()});
+ canvas.addEventListener('pointerup',()=>down=false);
+ canvas.addEventListener('pointerleave',()=>down=false);
+ document.getElementById('restart').addEventListener('click',()=>reset());
+ started=false;running=false;gameOver=false;score=0;hi=Number(localStorage.getItem('virusRunnerHI')||0);virusIndex=0;player={x:85,y:ground-42,w:40,h:42,vy:0,duck:false,onGround:true};obstacles=[];clouds=[{x:160,y:65},{x:470,y:95},{x:760,y:55}];frame=0;speed=6;groundOffset=0;dark=false;nextSwitch=700;virusEl.textContent='VIRUS: '+viruses[0].name;scoreEl.textContent=`HI ${String(hi).padStart(5,'0')}   00000`;
+ loop();
+})();
+</script>
+</body>
+</html>
